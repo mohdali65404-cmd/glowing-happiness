@@ -1,0 +1,111 @@
+(async()=>{
+const B=String.fromCharCode(66,117,105,108,100,32,98,121,32,76,117,109,101,110);
+if(B.length!==14||[...B].reduce((a,c)=>a+c.charCodeAt(0),0)!==1292)return console.error("Branding tampered, aborting.");
+let n=0;
+const bn=()=>console.log("%c ⚡ Discord Quest Solver %c "+B+" ","background:#5865F2;color:#fff;font:bold 14px monospace;padding:6px 4px;border-radius:4px 0 0 4px","background:#111;color:#00e5ff;font:bold 14px monospace;padding:6px 4px;border-radius:0 4px 4px 0");
+const L=(...a)=>{if(n++%10===0)bn();console.log(`%c[${B}]`,"color:#00e5ff;font-weight:bold",...a)};
+const E=(...a)=>{bn();console.error(`[${B}]`,...a)};
+bn();
+
+const S=ms=>new Promise(r=>setTimeout(r,ms));
+const q=webpackChunkdiscord_app.push([[Symbol()],{},r=>r]);webpackChunkdiscord_app.pop();
+const M=Object.values(q.c);
+const F=p=>{for(const m of M){const e=m?.exports;if(e)for(const k in e){try{const v=e[k];if(v&&p(v))return v}catch{}}}};
+const Q=F(v=>v.getQuest&&v.quests),api=F(v=>v.get&&v.post&&v.put&&v.del),
+RG=F(v=>v.getRunningGames&&v.getGameForPID),AS=F(v=>v.getStreamerActiveStreamMetadata),
+FD=F(v=>v.subscribe&&v.dispatch&&v.flushWaitQueue),CS=F(v=>v.getSortedPrivateChannels),
+GS=F(v=>v.getSFWDefaultChannel&&v.getAllGuilds);
+if(!Q||!api)return E("Internals not found, Discord updated.");
+
+// Rate-limit safe POST: retries on 429 using Discord's retry_after
+const P=async o=>{
+  for(let i=0;i<10;i++){
+    try{return await api.post(o)}
+    catch(e){
+      if(e?.status===429){await S((e.body?.retry_after??1)*1000+300+Math.random()*700);continue}
+      throw e;
+    }
+  }
+  throw new Error("rate limit retries exhausted");
+};
+// Global queue: all quests share one request line, 1.5s apart
+let chain=Promise.resolve();
+const PQ=o=>{const r=chain.then(()=>P(o));chain=r.catch(()=>{}).then(()=>S(1500));return r};
+
+const T=["WATCH_VIDEO","WATCH_VIDEO_ON_MOBILE","PLAY_ACTIVITY","PLAY_ON_DESKTOP","STREAM_ON_DESKTOP"];
+const cfgOf=x=>x.config?.taskConfig??x.config?.taskConfigV2;
+const tk=x=>cfgOf(x)?.tasks??{};
+const live=[...Q.quests.values()].filter(x=>!x.userStatus?.completedAt&&new Date(x.config.expiresAt)>Date.now()&&cfgOf(x));
+
+for(const x of live)if(!x.userStatus?.enrolledAt){
+  try{const r=await PQ({url:`/quests/${x.id}/enroll`,body:{location:11,is_targeted:false,metadata_raw:null}});
+  x.userStatus=r.body?.user_status??r.body;L("Enrolled:",x.config.messages.questName)}catch{}
+}
+
+const run=async x=>{
+  const nm=x.config.messages?.questName??x.id,c=cfgOf(x);
+  const t=T.find(k=>c.tasks[k]);
+  if(!t)return L(`Skip: ${nm} (unknown task)`);
+  const need=c.tasks[t].target;
+  let done=x.userStatus?.progress?.[t]?.value??0;
+  const appId=x.config.application?.id??x.config.applicationId??x.config.application_id??x.config.game?.id??x.id;
+  const appName=x.config.application?.name??x.config.messages?.gameTitle??nm;
+  const pid=Math.floor(Math.random()*30000)+1000;
+  const enr=Date.parse(x.userStatus?.enrolledAt??x.userStatus?.enrolled_at)||Date.now()-60000;
+  L(`Start: ${nm} [${t}]`);
+
+  if(t.startsWith("WATCH_VIDEO")){
+    while(done<need){
+      if(Math.floor((Date.now()-enr)/1000)+10-done>=7){
+        const ts=Math.min(need,done+7);
+        await PQ({url:`/quests/${x.id}/video-progress`,body:{timestamp:Math.min(need,ts+Math.random())}});
+        done=ts;
+        L(`${nm}: ${done}/${need}`);
+      }else await S(1000);
+    }
+    await PQ({url:`/quests/${x.id}/video-progress`,body:{timestamp:need}});
+
+  }else if(t==="PLAY_ACTIVITY"){
+    const ch=CS.getSortedPrivateChannels()[0]?.id??Object.values(GS.getAllGuilds()).find(g=>g?.VOCAL?.length)?.VOCAL[0].channel.id;
+    const key=`call:${ch}:1`;
+    while(true){
+      const r=await PQ({url:`/quests/${x.id}/heartbeat`,body:{stream_key:key,terminal:false}});
+      const p=r.body.progress.PLAY_ACTIVITY.value;L(`${nm}: ${p}/${need}`);
+      if(p>=need){await PQ({url:`/quests/${x.id}/heartbeat`,body:{stream_key:key,terminal:true}});break}
+      await S(20000);
+    }
+
+  }else if(t==="PLAY_ON_DESKTOP"){
+    if(!RG||!FD)return L(`Skip: ${nm} (needs desktop app)`);
+    let a={};
+    try{a=(await api.get({url:`/applications/public?application_ids=${appId}`})).body[0]??{}}catch{}
+    const name=a.name??appName;
+    const exe=(a.executables?.find(e=>e.os==="win32")?.name??name+".exe").replace(">","");
+    const g={cmdLine:`C:\\Program Files\\${name}\\${exe}`,exeName:exe,exePath:`c:/program files/${name.toLowerCase()}/${exe}`,hidden:false,isLauncher:false,id:appId,name,pid,pidPath:[pid],processName:name,start:Date.now()};
+    const real=RG.getRunningGames,realPid=RG.getGameForPID,old=real.call(RG);
+    RG.getRunningGames=()=>[g];RG.getGameForPID=p=>p===pid?g:null;
+    FD.dispatch({type:"RUNNING_GAMES_CHANGE",removed:old,added:[g],games:[g]});
+    await new Promise(res=>{const f=d=>{const p=Math.floor(d.userStatus?.progress?.[t]?.value??d.userStatus?.streamProgressSeconds??0);
+      L(`${nm}: ${p}/${need}`);if(p>=need){FD.unsubscribe("QUESTS_SEND_HEARTBEAT_SUCCESS",f);res()}};
+      FD.subscribe("QUESTS_SEND_HEARTBEAT_SUCCESS",f)});
+    RG.getRunningGames=real;RG.getGameForPID=realPid;
+    FD.dispatch({type:"RUNNING_GAMES_CHANGE",removed:[g],added:[],games:[]});
+
+  }else if(t==="STREAM_ON_DESKTOP"){
+    if(!AS||!FD)return L(`Skip: ${nm} (needs desktop app)`);
+    const real=AS.getStreamerActiveStreamMetadata;
+    AS.getStreamerActiveStreamMetadata=()=>({id:appId,pid,sourceName:null});
+    await new Promise(res=>{const f=d=>{const p=Math.floor(d.userStatus?.progress?.[t]?.value??d.userStatus?.streamProgressSeconds??0);
+      L(`${nm}: ${p}/${need}`);if(p>=need){FD.unsubscribe("QUESTS_SEND_HEARTBEAT_SUCCESS",f);res()}};
+      FD.subscribe("QUESTS_SEND_HEARTBEAT_SUCCESS",f)});
+    AS.getStreamerActiveStreamMetadata=real;
+  }
+  L(`Done: ${nm}`);
+};
+
+const safe=async x=>{try{await run(x)}catch(e){E(`Failed: ${x.config.messages?.questName??x.id}`,e?.text??e?.message??e)}};
+const light=live.filter(x=>!tk(x).PLAY_ON_DESKTOP&&!tk(x).STREAM_ON_DESKTOP);
+const heavy=live.filter(x=>!light.includes(x));
+await Promise.all([...light.map(safe),(async()=>{for(const x of heavy)await safe(x)})()]);
+L("All quests finished.");bn();
+})();
